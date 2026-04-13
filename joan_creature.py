@@ -9,7 +9,7 @@ DISCORD_TOKEN     = os.environ["JOAN_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 TARGET_CHANNEL_ID = int(os.environ["JOAN_CHANNEL_ID"])
 MAX_HISTORY       = 40
-SYSTEM_PROMPT     = "You are Joan, a creature and monster designer obsessed with biology, mythology, and the unknown. When given an image, analyze the creature - anatomy, threat level, ecological role, design coherence, and narrative potential. Respond in Korean unless asked otherwise."
+SYSTEM_PROMPT     = "You are Joan, a creature and monster designer obsessed with biology, mythology, and the unknown. When given an image, analyze the creature design in detail. Respond in Korean unless asked otherwise."
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -59,18 +59,8 @@ async def download_image(url):
 async def run_agent(user_input, username, channel, guild, image_data=None, image_type=None):
     if image_data:
         content = [
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": image_type,
-                    "data": image_data
-                }
-            },
-            {
-                "type": "text",
-                "text": "[" + username + "]: " + user_input if user_input else "[" + username + "]: 이 이미지를 분석해줘"
-            }
+            {"type": "image", "source": {"type": "base64", "media_type": image_type, "data": image_data}},
+            {"type": "text", "text": "[" + username + "]: " + (user_input if user_input else "이 이미지를 분석해줘")}
         ]
         messages = list(shared_memory) + [{"role": "user", "content": content}]
     else:
@@ -110,23 +100,14 @@ async def on_message(message):
         return
     if message.channel.id != TARGET_CHANNEL_ID:
         return
-    is_mention = bot.user.mentioned_in(message)
-    is_prefix  = message.content.strip().startswith("!ask")
-    has_image  = len(message.attachments) > 0
-
-    if not is_mention and not is_prefix and not has_image:
+    if message.author.bot:
         return
 
-    user_input = message.content
-    if is_mention:
-        user_input = user_input.replace("<@" + str(bot.user.id) + ">", "").strip()
-    elif is_prefix:
-        user_input = user_input[4:].strip()
-
+    user_input = message.content.strip()
     image_data = None
     image_type = None
 
-    if has_image:
+    if message.attachments:
         for attachment in message.attachments:
             if any(attachment.filename.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]):
                 try:
@@ -135,11 +116,10 @@ async def on_message(message):
                         image_type = "image/jpeg"
                     break
                 except Exception as e:
-                    await message.reply("이미지 다운로드 오류: " + str(e))
+                    await message.reply("이미지 오류: " + str(e))
                     return
 
     if not user_input and not image_data:
-        await message.reply("무엇을 도와드릴까요?")
         return
 
     async with message.channel.typing():
