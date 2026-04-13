@@ -1,15 +1,15 @@
 import discord
 import anthropic
-import aiohttp
 import os
 import base64
+import aiohttp
 from collections import deque
 
 DISCORD_TOKEN     = os.environ["ALEX_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 TARGET_CHANNEL_ID = int(os.environ["ALEX_CHANNEL_ID"])
 MAX_HISTORY       = 40
-SYSTEM_PROMPT     = "You are Alex, an expert character designer who creates memorable, diverse, and visually compelling game characters. When given an image, analyze the character design in detail. Respond in Korean unless asked otherwise."
+SYSTEM_PROMPT     = "You are Alex, an expert character designer. You focus on silhouette, color, personality expression, and appeal. Analyze character designs in detail when given images. Always give specific, actionable feedback. Respond in Korean unless asked otherwise."
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -18,37 +18,6 @@ bot    = discord.Client(intents=intents)
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 shared_memory = deque(maxlen=MAX_HISTORY)
 
-TOOLS = [
-    {
-        "name": "web_search",
-        "description": "웹에서 최신 정보를 검색합니다.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "검색 키워드"}
-            },
-            "required": ["query"]
-        }
-    }
-]
-
-async def do_web_search(query):
-    try:
-        async with aiohttp.ClientSession() as session:
-            url = "https://api.duckduckgo.com/"
-            params = {"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"}
-            async with session.get(url, params=params) as resp:
-                data = await resp.json(content_type=None)
-        abstract = data.get("AbstractText", "").strip()
-        related  = [r["Text"] for r in data.get("RelatedTopics", [])[:5] if "Text" in r]
-        if abstract:
-            return "검색 결과 (" + query + ")\n" + abstract
-        elif related:
-            return "관련 항목 (" + query + ")\n" + "\n".join("- " + t for t in related)
-        return "검색 결과 없음"
-    except Exception as e:
-        return "웹 검색 오류: " + str(e)
-
 async def download_image(url):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
@@ -56,7 +25,7 @@ async def download_image(url):
             content_type = resp.content_type
             return base64.b64encode(data).decode("utf-8"), content_type
 
-async def run_agent(user_input, username, channel, guild, image_data=None, image_type=None):
+async def run_agent(user_input, username, image_data=None, image_type=None):
     if image_data:
         content = [
             {"type": "image", "source": {"type": "base64", "media_type": image_type, "data": image_data}},
@@ -67,28 +36,15 @@ async def run_agent(user_input, username, channel, guild, image_data=None, image
         shared_memory.append({"role": "user", "content": "[" + username + "]: " + user_input})
         messages = list(shared_memory)
 
-    for _ in range(8):
-        response = claude.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages
-        )
-        if response.stop_reason == "end_turn":
-            final_text = "".join(block.text for block in response.content if hasattr(block, "text"))
-            shared_memory.append({"role": "assistant", "content": final_text})
-            return final_text or "(응답 없음)"
-        tool_results = []
-        for block in response.content:
-            if block.type == "tool_use" and block.name == "web_search":
-                result = await do_web_search(block.input["query"])
-                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result})
-        if not tool_results:
-            break
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({"role": "user", "content": tool_results})
-    return "응답 생성 실패"
+    response = claude.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        system=SYSTEM_PROMPT,
+        messages=messages
+    )
+    final_text = "".join(block.text for block in response.content if hasattr(block, "text"))
+    shared_memory.append({"role": "assistant", "content": final_text})
+    return final_text or "(응답 없음)"
 
 @bot.event
 async def on_ready():
@@ -98,9 +54,9 @@ async def on_ready():
 async def on_message(message):
     if message.author == bot.user:
         return
-    if message.channel.id != TARGET_CHANNEL_ID:
-        return
     if message.author.bot:
+        return
+    if message.channel.id != TARGET_CHANNEL_ID:
         return
 
     user_input = message.content.strip()
@@ -123,7 +79,7 @@ async def on_message(message):
         return
 
     async with message.channel.typing():
-        reply = await run_agent(user_input, message.author.display_name, message.channel, message.guild, image_data, image_type)
+        reply = await run_agent(user_input, message.author.display_name, image_data, image_type)
 
     if len(reply) <= 2000:
         await message.reply(reply)
