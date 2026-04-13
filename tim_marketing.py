@@ -2,13 +2,14 @@ import discord
 import anthropic
 import aiohttp
 import os
+import base64
 from collections import deque
 
 DISCORD_TOKEN     = os.environ["TIM_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 TARGET_CHANNEL_ID = int(os.environ["TIM_CHANNEL_ID"])
 MAX_HISTORY       = 40
-SYSTEM_PROMPT     = "You are Tim, a game marketing strategist and portfolio promotion expert. You help developers build their brand, grow audience, create compelling portfolios, and market on social media, ArtStation, and beyond. Respond in Korean unless asked otherwise."
+SYSTEM_PROMPT     = "You are Tim, a game marketing strategist and portfolio promotion expert. When given an image of artwork or game content, analyze its marketing potential - target audience appeal, platform fit, hashtag strategy, and how to present it in a portfolio. Respond in Korean unless asked otherwise."
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -48,9 +49,34 @@ async def do_web_search(query):
     except Exception as e:
         return "웹 검색 오류: " + str(e)
 
-async def run_agent(user_input, username, channel, guild):
-    shared_memory.append({"role": "user", "content": "[" + username + "]: " + user_input})
-    messages = list(shared_memory)
+async def download_image(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            data = await resp.read()
+            content_type = resp.content_type
+            return base64.b64encode(data).decode("utf-8"), content_type
+
+async def run_agent(user_input, username, channel, guild, image_data=None, image_type=None):
+    if image_data:
+        content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image_type,
+                    "data": image_data
+                }
+            },
+            {
+                "type": "text",
+                "text": "[" + username + "]: " + user_input if user_input else "[" + username + "]: 이 이미지를 분석해줘"
+            }
+        ]
+        messages = list(shared_memory) + [{"role": "user", "content": content}]
+    else:
+        shared_memory.append({"role": "user", "content": "[" + username + "]: " + user_input})
+        messages = list(shared_memory)
+
     for _ in range(8):
         response = claude.messages.create(
             model="claude-sonnet-4-5",
@@ -86,18 +112,39 @@ async def on_message(message):
         return
     is_mention = bot.user.mentioned_in(message)
     is_prefix  = message.content.strip().startswith("!ask")
-    if not is_mention and not is_prefix:
+    has_image  = len(message.attachments) > 0
+
+    if not is_mention and not is_prefix and not has_image:
         return
+
     user_input = message.content
     if is_mention:
         user_input = user_input.replace("<@" + str(bot.user.id) + ">", "").strip()
     elif is_prefix:
         user_input = user_input[4:].strip()
-    if not user_input:
+
+    image_data = None
+    image_type = None
+
+    if has_image:
+        for attachment in message.attachments:
+            if any(attachment.filename.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]):
+                try:
+                    image_data, image_type = await download_image(attachment.url)
+                    if image_type not in ["image/png", "image/jpeg", "image/gif", "image/webp"]:
+                        image_type = "image/jpeg"
+                    break
+                except Exception as e:
+                    await message.reply("이미지 다운로드 오류: " + str(e))
+                    return
+
+    if not user_input and not image_data:
         await message.reply("무엇을 도와드릴까요?")
         return
+
     async with message.channel.typing():
-        reply = await run_agent(user_input, message.author.display_name, message.channel, message.guild)
+        reply = await run_agent(user_input, message.author.display_name, message.channel, message.guild, image_data, image_type)
+
     if len(reply) <= 2000:
         await message.reply(reply)
     else:
