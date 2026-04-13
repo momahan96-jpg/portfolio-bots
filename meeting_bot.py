@@ -28,7 +28,7 @@ async def select_experts(topic):
         "다음 주제에 가장 관련있는 전문가 2~4명을 골라줘.\n"
         "전문가 목록: " + names + "\n"
         "주제: " + topic + "\n\n"
-        "관련있는 전문가 이름만 쉼표로 구분해서 답해줘. 이름만, 설명 없이.\n"
+        "관련있는 전문가 이름만 쉼표로 구분해서 답해줘. 이름만.\n"
         "예시: Jim, Alex, Joel"
     )
     response = claude.messages.create(
@@ -50,7 +50,7 @@ async def get_expert_opinion(name, desc, topic, previous_opinions):
         "너는 " + name + "이야. " + desc + "\n"
         "아래 주제에 대해 전문 분야 관점에서 의견을 말해줘.\n"
         "앞선 의견이 있으면 참고하고 발전시켜줘.\n"
-        "3~5문장으로 간결하게, 한국어로 답해줘.\n"
+        "3~5문장으로 간결하게, 한국어로.\n"
         + context + "\n주제: " + topic
     )
     response = claude.messages.create(
@@ -81,10 +81,8 @@ async def on_message(message):
         return
 
     await message.channel.send("**회의 시작** - 주제: " + topic + "\n관련 전문가 선정 중...")
-
     async with message.channel.typing():
         selected = await select_experts(topic)
-
     await message.channel.send("**참석자:** " + ", ".join(selected) + "\n")
 
     previous_opinions = []
